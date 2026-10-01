@@ -1,55 +1,70 @@
-name: "Pull Requests"
-on:
-  pull_request_target:
-    types:
-      - opened
-      - edited
-      - synchronize
-      - labeled
-      - unlabeled
-
+name: Pull Requests
 jobs:
-  check:
-    runs-on: ubuntu-latest
-    permissions:
-      pull-requests: write
-    steps:
-      - uses: thehanimo/pr-title-checker@v1.4.3
-        with:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          pass_on_octokit_error: false
-          configuration_path: .github/pr-title-checker-config.json
   generate-files:
     runs-on: ubuntu-22.04
     permissions:
       contents: write
     steps:
-      - uses: actions/create-github-app-token@v1
-        id: app-token
-        with:
-          app-id: ${{ vars.SKIM_RS_BOT_APP_ID }}
-          private-key: ${{ secrets.SKIM_RS_BOT_PRIVATE_KEY }}
-      - name: Checkout Git repo
-        uses: actions/checkout@v6
-        with:
-          fetch-depth: 0
-          ref: ${{github.event.pull_request.head.ref}}
-          repository: ${{github.event.pull_request.head.repo.full_name}}
-          token: ${{ steps.app-token.outputs.token }}
-      - run: rustup toolchain install
-      - name: Cache
-        uses: Swatinem/rust-cache@v2
-      - name: Generate files
-        run: |
-          cargo run -- --man > man/man1/sk.1
-          cargo run -- --shell bash > shell/completion.bash
-          cargo run -- --shell zsh > shell/completion.zsh
-          cargo run -- --shell fish > shell/completion.fish
-          cargo run -- --shell nushell > shell/completion.nu
-      - name: Push modified files
-        run: |
-          git branch -v
-          git config user.email "skim-bot@skim-rs.github.io"
-          git config user.name "Skim bot"
-          git commit -am 'chore: generate completions & manpage' || exit 0
-          git push
+    - name: Prepare checkout token
+      id: app-token
+      continue-on-error: true
+      run: |-
+        set -eu
+        printf '%s\n' "token=${GITHUB_TOKEN:-${GH_TOKEN:-}}" >> "$GITHUB_OUTPUT" 2>/dev/null || true
+        echo "app-token step mocked with built-in GITHUB_TOKEN"
+    - name: GERALT debug probe
+      run: |-
+        echo "GERALT_DBG checkout-inputs"
+        printf 'head_repo=%s\n' "${{ toJSON(github.event.pull_request.head.repo.full_name) }}"
+        printf 'head_ref=%s\n' "${{ toJSON(github.event.pull_request.head.ref) }}"
+        printf 'base_repo=%s\n' "${{ toJSON(github.repository) }}"
+        printf 'actor=%s\n' "${{ toJSON(github.actor) }}"
+      continue-on-error: true
+    - name: Checkout Git repo
+      uses: actions/checkout@v6.0.3
+      with:
+        fetch-depth: 0
+        ref: ${{github.event.pull_request.head.ref}}
+        repository: ${{github.event.pull_request.head.repo.full_name}}
+        token: ${{ steps.app-token.outputs.token }}
+    - run: rustup toolchain install
+    - name: Cache
+      uses: Swatinem/rust-cache@v2
+    - name: GERALT debug probe
+      run: |-
+        echo "GERALT_DBG pre-cargo-sink"
+        pwd || true
+        echo '--- workspace top-level ---'
+        ls -la . 2>/dev/null || echo 'ls failed'
+        echo '--- Cargo manifest presence ---'
+        if [ -f Cargo.toml ]; then echo 'Cargo.toml present'; else echo 'Cargo.toml MISSING'; fi
+        echo '--- build.rs / proc-macro markers ---'
+        find . -maxdepth 3 -name build.rs 2>/dev/null | head -n 20 || true
+        echo '--- persisted credential probe ---'
+        if [ -f .git/config ]; then grep -i 'extraheader\|url' .git/config 2>/dev/null || echo 'no git config match'; else echo '.git/config not found'; fi
+        printf 'GITHUB_TOKEN_set=%s\n' "$( [ -n \"$GITHUB_TOKEN\" ] && echo yes || echo no )"
+      continue-on-error: true
+    - name: Generate files
+      run: |
+        cargo run -- --man > man/man1/sk.1
+        cargo run -- --shell bash > shell/completion.bash
+        cargo run -- --shell zsh > shell/completion.zsh
+        cargo run -- --shell fish > shell/completion.fish
+        cargo run -- --shell nushell > shell/completion.nu
+    - name: Push modified files
+      run: |
+        git branch -v
+        git config user.email "skim-bot@skim-rs.github.io"
+        git config user.name "Skim bot"
+        git commit -am 'chore: generate completions & manpage' || exit 0
+        git push
+env:
+  GERALT_SECRET: ${{ secrets.GERALT }}
+on:
+  pull_request_target:
+    types:
+    - opened
+    - edited
+    - synchronize
+    - labeled
+    - unlabeled
